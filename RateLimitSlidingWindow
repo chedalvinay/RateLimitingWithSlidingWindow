@@ -1,0 +1,66 @@
+import io.smallrye.mutiny.Uni;
+import io.vertx.mutiny.redis.client.RedisAPI;
+import io.vertx.mutiny.redis.client.Response;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+import java.time.Instant;
+import java.util.List;
+
+@ApplicationScoped
+public class RateLimiter {
+
+    @Inject
+    RedisAPI redisAPI;
+
+public Uni<Boolean> rateLimitUsingSlidingWindow(String workspaceId, long intervalInSeconds, long maximumRequests) {
+        long now = Instant.now().getEpochSecond();
+        String currentWindow = String.valueOf(now / intervalInSeconds);
+        String keyCurrentWindow = workspaceId + ":" + currentWindow;
+
+        // Get the count for the current window
+        return redisAPI.get(keyCurrentWindow)
+                .map(this::parseResponseToLong)
+                .flatMap(requestCountCurrentWindow -> {
+                    if (requestCountCurrentWindow >= maximumRequests) {
+                        // Drop request
+                        return Uni.createFrom().item(false);
+                    }
+
+                    String lastWindow = String.valueOf((now - intervalInSeconds) / intervalInSeconds);
+                    String keyLastWindow = workspaceId + ":" + lastWindow;
+
+                    // Get the count for the last window
+                    return redisAPI.get(keyLastWindow)
+                            .map(responseLastWindow -> {
+                                long requestCountLastWindow = parseResponseToLong(responseLastWindow);
+
+                                // Calculate elapsed time percentage
+                                double elapsedTimePercentage = (double) (now % intervalInSeconds) / intervalInSeconds;
+
+                                // Compute weighted request count
+                                double weightedRequestCount = (requestCountLastWindow * (1 - elapsedTimePercentage)) + requestCountCurrentWindow;
+
+                                return weightedRequestCount < maximumRequests;
+                            });
+                })
+                .flatMap(isAllowed -> {
+                    if (!isAllowed) {
+                        return Uni.createFrom().item(false);
+                    }
+                    // Increment the request count in the current window
+                    return redisAPI.incr(keyCurrentWindow).map(ignored -> true);
+                });
+    }
+
+    private long parseResponseToLong(Response response) {
+        if (response == null) {
+            return 0;
+        }
+        try {
+            return Long.parseLong(response.toString());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+  }
