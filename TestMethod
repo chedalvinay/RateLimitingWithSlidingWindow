@@ -1,0 +1,43 @@
+import io.vertx.mutiny.core.Vertx;
+import io.vertx.mutiny.redis.client.Redis;
+import io.vertx.mutiny.redis.client.RedisAPI;
+import io.vertx.redis.client.RedisOptions;
+
+import java.util.concurrent.TimeUnit;
+
+public class Test {
+
+    public static void main(String[] args) {
+        // Initialize Vertx and RedisAPI manually
+        Vertx vertx = Vertx.vertx();
+        RedisOptions options = new RedisOptions().setConnectionString("redis://localhost:6379");
+        Redis redis = Redis.createClient(vertx, options);
+        RedisAPI redisAPI = RedisAPI.api(redis);
+
+        // Create RateLimiter and set RedisAPI
+        RateLimiter rateLimiter = new RateLimiter();
+        rateLimiter.redisAPI = redisAPI;
+
+        // Define rate-limiting parameters
+        String userID = "user123";
+        long intervalInSeconds = 1;
+        long maximumRequests = 1;
+        long burstCapacity = 5;
+
+        // Test rate limiting
+        for (int i = 0; i < 30; i++) {
+            boolean allowed = rateLimiter.rateLimitUsingSlidingWindowWithBurst(userID, intervalInSeconds, maximumRequests, burstCapacity)
+                    .await().indefinitely();
+            System.out.println("Request " + (i + 1) + " allowed: " + allowed);
+            try {
+                TimeUnit.SECONDS.sleep(1); // Simulate some delay between requests
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+        }
+
+        // Close Redis client and Vertx after testing
+        redis.close();
+        vertx.close().await().indefinitely();
+    }
+}
